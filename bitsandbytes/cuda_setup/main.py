@@ -153,7 +153,7 @@ class CUDASetup:
                 self.lib = ct.cdll.LoadLibrary(binary_path)
             else:
                 self.add_log_entry(f"CUDA SETUP: Loading binary {binary_path}...")
-                self.lib = ct.cdll.LoadLibrary(binary_path)
+                self.lib = ct.cdll.LoadLibrary(str(binary_path))
         except Exception as ex:
             self.add_log_entry(str(ex))
 
@@ -331,7 +331,9 @@ def evaluate_cuda_setup():
         cuda_setup.add_log_entry('='*35 + 'BUG REPORT' + '='*35)
         cuda_setup.add_log_entry(('Welcome to bitsandbytes. For bug reports, please run\n\npython -m bitsandbytes\n\n'),
               ('and submit this information together with your error trace to: https://github.com/TimDettmers/bitsandbytes/issues'))
-        cuda_setup.add_log_entry('='*80)
+        cuda_setup.add_log_entry('='*80)        
+    return "libbitsandbytes_cuda121.dll", None, None, None
+
     if not torch.cuda.is_available(): return 'libbitsandbytes_cpu.so', None, None, None
 
     cudart_path = determine_cuda_runtime_lib_path()

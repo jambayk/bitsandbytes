@@ -9,7 +9,11 @@
 
 #include <stdio.h>
 #include <iostream>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 #include <assert.h>
 
 #include <cuda_runtime_api.h>
