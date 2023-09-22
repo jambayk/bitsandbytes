@@ -96,7 +96,6 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
 //  CUDA_CHECK_RETURN(cudaPeekAtLastError());
 //}
 
-
 template<typename T, int OPTIMIZER> void optimizer32bit(T* g, T* p,
                 float* state1, float* state2, float *unorm, float max_unorm, float param_norm,
                 const float beta1, const float beta2, const float eps, const float weight_decay,
