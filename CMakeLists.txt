@@ -3,8 +3,7 @@ cmake_minimum_required(VERSION 3.12)
 project(bitsandbytes LANGUAGES CXX CUDA)
 set(CMAKE_CXX_STANDARD 20)
 if(WIN32)
-# The trick is to set this here instead of in the CMakeLists.txt inside csrc/ .. For whatever reason just doesn't work there.
-#	set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS 1)
+	set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS 1)
 ENDIF()
 
 # Recurse into the csrc dir
