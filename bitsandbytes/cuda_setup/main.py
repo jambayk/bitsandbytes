@@ -171,7 +171,7 @@ class CUDASetup:
                 self.add_log_entry(f"CUDA SETUP: Defaulting to {legacy_binary_name}...")
                 binary_path = package_dir / legacy_binary_name
                 if not binary_path.exists() or torch.cuda.is_available():
-                    # TODO: windows support
+                    # TODO: windows support for the instructions
                     self.add_log_entry('')
                     self.add_log_entry('='*48 + 'ERROR' + '='*37)
                     self.add_log_entry('CUDA SETUP: CUDA detection failed! Possible reasons:')
@@ -289,7 +289,7 @@ def determine_cuda_runtime_lib_path() -> Union[Path, None]:
     """
         Searches for a cuda installations, in the following order of priority:
             1. active conda env
-            2. LD_LIBRARY_PATH
+            2. LD_LIBRARY_PATH (PATH, CUDA_PATH on Windows)
             3. any other env vars, while ignoring those that
                 - are known to be unrelated (see `bnb.cuda_setup.env_vars.to_be_ignored`)
                 - don't contain the path separator `/`
@@ -299,8 +299,9 @@ def determine_cuda_runtime_lib_path() -> Union[Path, None]:
     """
     candidate_env_vars = get_potentially_lib_path_containing_env_vars()
 
-    cuda_runtime_libs = set()
-    envs_to_check = ["CONDA_PREFIX", "LD_LIBRARY_PATH", "PATH", "CUDA_PATH"]
+    envs_to_check = ["CONDA_PREFIX", "LD_LIBRARY_PATH"]
+    if IS_WINDOWS_PLATFORM:
+        envs_to_check += ["PATH", "CUDA_PATH"]
     for env in envs_to_check:
         if env not in candidate_env_vars:
             continue
@@ -315,8 +316,8 @@ def determine_cuda_runtime_lib_path() -> Union[Path, None]:
         warn_in_case_of_duplicates(cuda_libs_in_path)
 
         if cuda_libs_in_path:
-            cuda_runtime_libs.update(cuda_libs_in_path)
-            continue
+            # according to docstring, no need to continue searching
+            return next(iter(cuda_libs_in_path))
 
         CUDASetup.get_instance().add_log_entry(f'{candidate_env_vars[env]} did not contain '
             f'{CUDA_RUNTIME_LIBS} as expected! Searching further paths...', is_warning=True)
@@ -327,7 +328,7 @@ def determine_cuda_runtime_lib_path() -> Union[Path, None]:
     }
 
     cuda_runtime_libs = set()
-    for env_var, value in remaining_candidate_env_vars.items():
+    for value in remaining_candidate_env_vars.values():
         cuda_runtime_libs.update(find_cuda_lib_in(value))
 
     if len(cuda_runtime_libs) == 0:
