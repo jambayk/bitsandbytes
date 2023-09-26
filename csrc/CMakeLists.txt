@@ -77,6 +77,9 @@ target_link_libraries(bitsandbytes PRIVATE pthreadVC3)
 # Remove dots from the CUDA version
 string(REPLACE "." "" CMAKE_VS_PLATFORM_TOOLSET_CUDA_NO_DOTS ${CMAKE_VS_PLATFORM_TOOLSET_CUDA})
 
+# TODO: maybe allow the user to specify cuda architectures
+# all does not work on old machine with GTX 1660 Ti 
+# had to use 75
 set_target_properties(bitsandbytes
     PROPERTIES 
     RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_SOURCE_DIR}/bitsandbytes>"

@@ -22,18 +22,30 @@ import os
 import errno
 import torch
 from warnings import warn
-from itertools import product
+from packaging import version
 
 from pathlib import Path
 from typing import Set, Union
 from .env_vars import get_potentially_lib_path_containing_env_vars
 
+IS_WINDOWS_PLATFORM: bool = platform.system() == "Windows"
+
+PATH_COLLECTION_SEPARATOR: str = ":" if not IS_WINDOWS_PLATFORM else ";"
+
 # these are the most common libs names
 # libcudart.so is missing by default for a conda install with PyTorch 2.0 and instead
 # we have libcudart.so.11.0 which causes a lot of errors before
 # not sure if libcudart.so.12.0 exists in pytorch installs, but it does not hurt
-CUDA_RUNTIME_LIBS: list = ["libcudart.so", 'libcudart.so.11.0', 'libcudart.so.12.0']
+CUDA_RUNTIME_LIBS: list = (
+    ["libcudart.so", "libcudart.so.11.0", "libcudart.so.12.0"]
+    if not IS_WINDOWS_PLATFORM
+    # TODO: not sure if it is 110/120 or 11/12
+    else ["cudart64_110.dll", "cudart64_120.dll", "cudart64_11.dll", "cudart64_12.dll"]
+)
 
+SHARED_LIB_EXTENSION: str = ".so" if not IS_WINDOWS_PLATFORM else ".dll"
+
+# TODO: backup_paths is not being used at all
 # this is a order list of backup paths to search CUDA in, if it cannot be found in the main environmental paths
 backup_paths = []
 backup_paths.append('$CONDA_PREFIX/lib/libcudart.so.11.0')
@@ -46,7 +58,6 @@ class CUDASetup:
 
     def generate_instructions(self):
         if getattr(self, 'error', False): return
-        print(self.error)
         self.error = True
         if not self.cuda_available:
             self.add_log_entry('CUDA SETUP: Problem: The main issue seems to be that the main CUDA library was not detected or CUDA not installed.')
@@ -112,34 +123,30 @@ class CUDASetup:
                           'For example by adding the following to your .bashrc: export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:<path_to_cuda_dir/lib64\n'
                           f'Loading CUDA version: BNB_CUDA_VERSION={os.environ["BNB_CUDA_VERSION"]}'
                           f'\n{"="*80}\n\n'))
-                    self.binary_name = self.binary_name[:-6] + f'{os.environ["BNB_CUDA_VERSION"]}.so'
+                    # better to change the component than hardcode string manipulation
+                    binary_name_components = Path(self.binary_name).stem.split("_")
+                    binary_name_components[1] = f"cuda{os.environ['BNB_CUDA_VERSION']}"
+                    self.binary_name = f"{'_'.join(binary_name_components)}{SHARED_LIB_EXTENSION}"
+            if 'BNB_NO_CUBLASLT' in os.environ:
+                if os.environ["BNB_NO_CUBLASLT"] == "1" and "nocublaslt" not in self.binary_name:
+                    # this is to support the case where the user builds from source without cublaslt
+                    warn(
+                        f'\n\n{"="*80}\n'
+                        'WARNING: Manual override via BNB_NO_CUBLASLT env variable detected!\n'
+                        'Will use the no cublaslt version of bitsandbytes.\nIf this was unintended set the'
+                        'BNB_NO_CUBLASLT variable to an empty string: export BNB_NO_CUBLASLT='
+                        f'\n{"="*80}\n\n'
+                    )
+                    # add nocublaslt to the binary name
+                    self.binary_name = f"{Path(self.binary_name).stem}_nocublaslt{SHARED_LIB_EXTENSION}"
 
-    def load_binary_name(self, binary_name: str, package_dir: str) -> str:
-        """Load the appropriate binary depending on the OS."""
-        system = platform.system()
-        
-        if system == 'Linux':
-            suffix = '.so'
-        elif system == 'Windows':
-            suffix = '.dll'
-        else:
-            raise ValueError(f"Unsupported OS: {system}")
-
-        binary_path = package_dir / f"{binary_name}{suffix}"
-        
-        if not binary_path.exists():
-            raise FileNotFoundError(f"Binary file {binary_path} does not exist")
-        
-        return f"{binary_name}{suffix}"
-    
     def run_cuda_setup(self):
         self.initialized = True
         self.cuda_setup_log = []
 
         package_dir = Path(__file__).parent.parent
         binary_name, cudart_path, cc, cuda_version_string = evaluate_cuda_setup()
-        # load right binary depending on extension
-        binary_name = self.load_binary_name(binary_name, package_dir)       
+        binary_name = f"{binary_name}{SHARED_LIB_EXTENSION}"
 
         self.cudart_path = cudart_path
         self.cuda_available = torch.cuda.is_available()
@@ -152,12 +159,19 @@ class CUDASetup:
         binary_path = package_dir / self.binary_name
 
         try:
+            # check python version
+            if IS_WINDOWS_PLATFORM and version.parse(platform.python_version()) >= version.parse("3.8"):
+                # on Windows, for python 3.8+, we need to add the dll directories 
+                # refer to https://docs.python.org/3.8/whatsnew/3.8.html#changes-in-the-python-api
+                os.add_dll_directory(str(package_dir))
+                os.add_dll_directory(str(self.cudart_path.parent))
             if not binary_path.exists():
                 self.add_log_entry(f"CUDA SETUP: Required library version not found: {binary_name}. Maybe you need to compile it from source?")
-                legacy_binary_name = "libbitsandbytes_cpu.so"
+                legacy_binary_name = f"libbitsandbytes_cpu{SHARED_LIB_EXTENSION}"
                 self.add_log_entry(f"CUDA SETUP: Defaulting to {legacy_binary_name}...")
                 binary_path = package_dir / legacy_binary_name
                 if not binary_path.exists() or torch.cuda.is_available():
+                    # TODO: windows support for the instructions
                     self.add_log_entry('')
                     self.add_log_entry('='*48 + 'ERROR' + '='*37)
                     self.add_log_entry('CUDA SETUP: CUDA detection failed! Possible reasons:')
@@ -210,7 +224,7 @@ def is_cublasLt_compatible(cc):
     return has_cublaslt
 
 def extract_candidate_paths(paths_list_candidate: str) -> Set[Path]:
-    return {Path(ld_path) for ld_path in paths_list_candidate.split(":") if ld_path}
+    return {Path(ld_path) for ld_path in paths_list_candidate.split(PATH_COLLECTION_SEPARATOR) if ld_path}
 
 
 def remove_non_existent_dirs(candidate_paths: Set[Path]) -> Set[Path]:
@@ -275,7 +289,7 @@ def determine_cuda_runtime_lib_path() -> Union[Path, None]:
     """
         Searches for a cuda installations, in the following order of priority:
             1. active conda env
-            2. LD_LIBRARY_PATH
+            2. LD_LIBRARY_PATH (PATH, CUDA_PATH on Windows)
             3. any other env vars, while ignoring those that
                 - are known to be unrelated (see `bnb.cuda_setup.env_vars.to_be_ignored`)
                 - don't contain the path separator `/`
@@ -285,40 +299,42 @@ def determine_cuda_runtime_lib_path() -> Union[Path, None]:
     """
     candidate_env_vars = get_potentially_lib_path_containing_env_vars()
 
-    cuda_runtime_libs = set()
-    if "CONDA_PREFIX" in candidate_env_vars:
-        conda_libs_path = Path(candidate_env_vars["CONDA_PREFIX"]) / "lib"
+    envs_to_check = ["CONDA_PREFIX", "LD_LIBRARY_PATH"]
+    if IS_WINDOWS_PLATFORM:
+        envs_to_check += ["PATH", "CUDA_PATH"]
+    for env in envs_to_check:
+        if env not in candidate_env_vars:
+            continue
 
-        conda_cuda_libs = find_cuda_lib_in(str(conda_libs_path))
-        warn_in_case_of_duplicates(conda_cuda_libs)
+        path_to_search = Path(candidate_env_vars[env])
+        if env == "CONDA_PREFIX":
+            path_to_search = path_to_search / "lib"
+        elif env == "CUDA_PATH":
+            path_to_search = path_to_search / "bin"
 
-        if conda_cuda_libs:
-            cuda_runtime_libs.update(conda_cuda_libs)
+        cuda_libs_in_path = find_cuda_lib_in(str(path_to_search))
+        warn_in_case_of_duplicates(cuda_libs_in_path)
 
-        CUDASetup.get_instance().add_log_entry(f'{candidate_env_vars["CONDA_PREFIX"]} did not contain '
-            f'{CUDA_RUNTIME_LIBS} as expected! Searching further paths...', is_warning=True)
+        if cuda_libs_in_path:
+            # according to docstring, no need to continue searching
+            return next(iter(cuda_libs_in_path))
 
-    if "LD_LIBRARY_PATH" in candidate_env_vars:
-        lib_ld_cuda_libs = find_cuda_lib_in(candidate_env_vars["LD_LIBRARY_PATH"])
-
-        if lib_ld_cuda_libs:
-            cuda_runtime_libs.update(lib_ld_cuda_libs)
-        warn_in_case_of_duplicates(lib_ld_cuda_libs)
-
-        CUDASetup.get_instance().add_log_entry(f'{candidate_env_vars["LD_LIBRARY_PATH"]} did not contain '
+        CUDASetup.get_instance().add_log_entry(f'{candidate_env_vars[env]} did not contain '
             f'{CUDA_RUNTIME_LIBS} as expected! Searching further paths...', is_warning=True)
 
     remaining_candidate_env_vars = {
         env_var: value for env_var, value in candidate_env_vars.items()
-        if env_var not in {"CONDA_PREFIX", "LD_LIBRARY_PATH"}
+        if env_var not in envs_to_check
     }
 
     cuda_runtime_libs = set()
-    for env_var, value in remaining_candidate_env_vars.items():
+    for value in remaining_candidate_env_vars.values():
         cuda_runtime_libs.update(find_cuda_lib_in(value))
 
     if len(cuda_runtime_libs) == 0:
         CUDASetup.get_instance().add_log_entry('CUDA_SETUP: WARNING! libcudart.so not found in any environmental path. Searching in backup paths...')
+        # TODO: backup_paths is not being used at all
+        # update backup paths
         cuda_runtime_libs.update(find_cuda_lib_in('/usr/local/cuda/lib64'))
 
     warn_in_case_of_duplicates(cuda_runtime_libs)
@@ -377,6 +393,10 @@ def evaluate_cuda_setup():
 
     # we use ls -l instead of nvcc to determine the cuda version
     # since most installations will have the libcudart.so installed, but not the compiler
+
+    # TODO: this works for linux since the linux wheel comes with wheels for all CUDA versions +/- cublaslt
+    # for windows, the package built from source might not match the pytorch CUDA version
+    # for now, can use BNB_CUDA_VERSION and BNB_NO_CUBLASLT to override
 
     if has_cublaslt:
         binary_name = f"libbitsandbytes_cuda{cuda_version_string}"

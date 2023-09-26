@@ -38,7 +38,7 @@ def find_file_recursive(folder, filename):
 
     return out
 
-
+# TODO: support for windows here
 def generate_bug_report_information():
     print_header("")
     print_header("BUG REPORT INFORMATION")
